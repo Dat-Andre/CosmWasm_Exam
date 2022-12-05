@@ -8,7 +8,7 @@ use cw_utils::must_pay;
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{OWNER, CONFIG, ALL_BIDS_PER_BIDDER, Config};
+use crate::state::{OWNER, CONFIG, ALL_BIDS_PER_BIDDER, Config, HIGHEST_CURRENT_BID};
 
 /*
 // version info for migration info
@@ -57,8 +57,46 @@ pub fn execute(
 ) -> Result<Response, ContractError> {
 
     match msg {
-        ExecuteMsg::Bid {} => {do_bid(deps, info)}
+        ExecuteMsg::Bid {} => do_bid(deps, info),
+        ExecuteMsg::Close {  } => close_bid_event(deps, info)
     }
+}
+
+pub fn close_bid_event(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
+
+    // validate that it's the owner trying to close the bid event
+    let owner = OWNER.load(deps.storage)?;
+    if owner != info.sender {
+        return Err(ContractError::Unauthorized {  })
+    }
+
+    // validate that bid event is still open
+    let config = CONFIG.load(deps.storage)?;
+    if !config.open_sale {
+        return Err(ContractError::Unauthorized {  })
+    }
+
+    CONFIG.update(deps.storage, |mut con| -> Result<Config, ContractError> {
+        con.open_sale = false;
+        Ok(con)
+    })?;
+
+    let (_, am) = HIGHEST_CURRENT_BID.load(deps.storage)?;
+
+    let fee_amount = get_owner_fee_amount(am.clone(), config.fee)?;
+
+    let amount_wo_fee = am - fee_amount;
+
+    let winner_bid_to_owner_msg: CosmosMsg = CosmosMsg::Bank(cosmwasm_std::BankMsg::Send {
+        to_address: owner.into_string(),
+        amount: vec![Coin {
+            denom: config.required_native_denom,
+            amount: amount_wo_fee,
+        }],
+    });
+           
+    Ok(Response::new()
+        .add_message(winner_bid_to_owner_msg))
 }
 
 pub fn do_bid(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
@@ -73,9 +111,17 @@ pub fn do_bid(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractErro
         ).map_err(|_| ContractError::Unauthorized {  })?;
 
     
-    let highest_bid: Uint128 = get_highest_bid(&deps).unwrap_or(Uint128::zero());
+    let highest_bid: Uint128 = get_highest_bid(&deps)?;
 
-    let total_user_bid = ALL_BIDS_PER_BIDDER.load(deps.storage, info.sender.clone())?;
+    let total_user_bid = match ALL_BIDS_PER_BIDDER.may_load(deps.storage, info.sender.clone()) {
+        Ok(amount) => {
+            match amount {
+                Some(a) => a,
+                None => Uint128::zero()
+            }
+        },
+        Err(_) => return Err(ContractError::Unauthorized {  })
+    };
 
     if highest_bid >= total_user_bid + paid   {
         return Err(ContractError::Unauthorized {  })
@@ -111,22 +157,12 @@ pub fn do_bid(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractErro
 
 fn get_highest_bid(deps: &DepsMut) -> Result<Uint128,ContractError> {
 
-    let all_bidders = ALL_BIDS_PER_BIDDER.keys(deps.storage, None, None, cosmwasm_std::Order::Ascending).into_iter();
+    let hb = HIGHEST_CURRENT_BID.load(deps.storage);
 
-    let mut highest_bid: Uint128 = Uint128::zero();
-
-    for add in all_bidders {
-        if add.is_ok() {
-            let bid = ALL_BIDS_PER_BIDDER.load(deps.storage, add.unwrap())?;
-                if bid > highest_bid {
-                    highest_bid = bid;
-                }
-        }else {
-            return Err(ContractError::Unauthorized {  });
-        }
+    match hb {
+        Ok(highest_bid) => Ok(highest_bid.1),
+        Err(_) => Ok(Uint128::zero())
     }
-
-    Ok(highest_bid)
 }
 
 fn get_owner_fee_amount(input_amount: Uint128, fee_percent: Decimal) -> StdResult<Uint128> {
