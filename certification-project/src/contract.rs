@@ -70,7 +70,7 @@ pub fn retract(deps: DepsMut, info: MessageInfo, friend_rec: Option<String>)-> R
     // validate bid event is closed
     let config = CONFIG.load(deps.storage)?;
     if config.open_sale {
-        return Err(ContractError::Unauthorized {  })
+        return Err(ContractError::BidEventClosed {  })
     }
 
     // validate requester is not the winning addr
@@ -84,11 +84,23 @@ pub fn retract(deps: DepsMut, info: MessageInfo, friend_rec: Option<String>)-> R
                             .unwrap_or_else(|| info.sender.clone());
 
     // validate if requester have founds to withdraw
-    let amount_to_send = if let Some(amount) = ALL_BIDS_PER_BIDDER.may_load(deps.storage, info.sender)? {
-        amount
-    }else {
-        return Err(ContractError::Unauthorized {  })
-    };
+    
+    let mut amount_to_send = Uint128::zero();
+     
+    ALL_BIDS_PER_BIDDER.update(deps.storage, info.sender, |x| ->Result<_, ContractError> {
+           match x {
+            Some(mut amount) => {
+                if amount > Uint128::zero(){
+                    amount_to_send = amount;
+                    amount = Uint128::zero();
+                    Ok(amount)
+                }else {
+                    Err(ContractError::AlreadyRetracted{})
+                }
+            },
+            None => Err(ContractError::NoFundsToRetract {  }),
+        }
+    })?;
 
     // message to retract funds
     let withdraw_msg: CosmosMsg = CosmosMsg::Bank(cosmwasm_std::BankMsg::Send { 
@@ -113,7 +125,7 @@ pub fn close_bid_event(deps: DepsMut, info: MessageInfo) -> Result<Response, Con
     // validate that bid event is still open
     let config = CONFIG.load(deps.storage)?;
     if !config.open_sale {
-        return Err(ContractError::Unauthorized {  })
+        return Err(ContractError::BidEventClosed {  })
     }
 
     // close bid event in the state config
@@ -145,12 +157,12 @@ pub fn do_bid(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractErro
     // check if bid event is still open
     let config = CONFIG.load(deps.storage)?;
     if !config.open_sale {
-        return Err(ContractError::Unauthorized {  })
+        return Err(ContractError::BidEventClosed {  })
     }
 
     // find and check sent funds 
     let paid = must_pay(&info, config.required_native_denom.as_str()
-        ).map_err(|_| ContractError::Unauthorized {  })?;
+        ).map_err(|_| ContractError::WrongToken {  })?;
 
     // get highest bid
     let highest_bid: Uint128 = get_highest_bid(&deps)?;
@@ -163,12 +175,12 @@ pub fn do_bid(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractErro
                 None => Uint128::zero()
             }
         },
-        Err(_) => return Err(ContractError::Unauthorized {  })
+        Err(_) => return Err(ContractError::Std(StdError::GenericErr { msg: "std error".to_string()}))
     };
 
     // check if sender bid is inferior to the current highest bid
     if highest_bid >= total_user_bid + paid   {
-        return Err(ContractError::Unauthorized {  })
+        return Err(ContractError::BidAmountInsuf {  })
     }
 
     // save/update bid

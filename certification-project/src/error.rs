@@ -8,5 +8,20 @@ pub enum ContractError {
 
     #[error("Unauthorized")]
     Unauthorized {},
+
+    #[error("Bid event closed")]
+    BidEventClosed {},
+
+    #[error("You never participated...")]
+    NoFundsToRetract {},
+
+    #[error("Wrong token to bid")]
+    WrongToken {},
+
+    #[error("Bid amount is insufficient")]
+    BidAmountInsuf {},
+
+    #[error("Amount already retracted once")]
+    AlreadyRetracted {},
     
 }
