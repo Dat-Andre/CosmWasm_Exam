@@ -1,4 +1,3 @@
-use std::error::Error;
 
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
@@ -300,4 +299,102 @@ fn query_bidder_total_bid(deps: Deps, address: String) -> StdResult<Binary> {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+
+    use cosmwasm_std::{Empty, Addr, Decimal, Uint128, Coin};
+    use cw_multi_test::{Contract, ContractWrapper, App, Executor};
+
+
+    use crate::msg::{InstantiateMsg, ExecuteMsg, BidEventInfoResponse};
+
+    use super::{execute, instantiate, query};
+    
+    const OWNER: &str = "owner1";
+    const BIDDER1: &str = "bidder1";
+    const BIDDER2: &str = "bidder2";
+    const USED_DENOM: &str = "uJuno";
+    fn bid_festival_contract() -> Box<dyn Contract<Empty>> {
+        let contract = ContractWrapper::new(
+            execute,
+            instantiate,
+            query,
+        );
+        Box::new(contract)
+    }
+
+
+
+    #[test]
+    fn test_instantiate(){
+        let mut app = App::default();
+
+        let festival_code = app.store_code(bid_festival_contract());
+
+        let festival = app.instantiate_contract(
+            festival_code, 
+            Addr::unchecked(OWNER), 
+            &InstantiateMsg {
+                owner: Some(OWNER.to_string()),
+                required_native_denom: USED_DENOM.to_string(),
+                fee: Decimal::new(Uint128::new(5)),
+            }, 
+            &[], 
+            "biddromedo", 
+            None
+        ).unwrap();
+        
+        
+        
+        
+        app.execute_contract(
+            Addr::unchecked(BIDDER1),
+            festival.clone(),
+            &ExecuteMsg::Bid {
+            },
+            &[Coin {
+                denom: USED_DENOM.to_string(),
+                amount: Uint128::new(10),
+            }],
+        )
+        .unwrap();
+
+        app.execute_contract(
+            Addr::unchecked(BIDDER2),
+            festival.clone(),
+            &ExecuteMsg::Bid {
+            },
+            &[Coin {
+                denom: USED_DENOM.to_string(),
+                amount: Uint128::new(15),
+            }],
+        )
+        .unwrap();
+
+        app.execute_contract(
+            Addr::unchecked(BIDDER1),
+            festival.clone(),
+            &ExecuteMsg::Bid {
+            },
+            &[Coin {
+                denom: USED_DENOM.to_string(),
+                amount: Uint128::new(20),
+            }],
+        )
+        .unwrap();
+
+        let highest_bid: BidEventInfoResponse = app
+        .wrap()
+        .query_wasm_smart(
+            festival,
+            &crate::msg::QueryMsg::HighestBidInfo {  },
+        )
+        .unwrap();
+    assert_eq!(highest_bid.bid_amount, Some(Uint128::new(20)));
+    assert_eq!(highest_bid.addr, Some(Addr::unchecked(BIDDER1)));
+    assert_eq!(highest_bid.event_closed, false);
+
+    }
+
+
+
+}
