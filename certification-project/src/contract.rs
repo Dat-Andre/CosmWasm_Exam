@@ -105,6 +105,10 @@ pub fn retract(
         }
     })?;
 
+    let paid_fee = get_owner_fee_amount(amount_to_send, config.fee)?;
+
+    amount_to_send -= paid_fee;
+
     // message to retract funds
     let withdraw_msg: CosmosMsg = CosmosMsg::Bank(cosmwasm_std::BankMsg::Send {
         to_address: receiver_addr.into_string(),
@@ -202,9 +206,7 @@ pub fn do_bid(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractErro
     )?;
 
     // set new current winning bid
-    HIGHEST_CURRENT_BID.update(deps.storage, |(_, _)| -> Result<_, ContractError> {
-        Ok((info.sender, total_user_bid + paid))
-    })?;
+    HIGHEST_CURRENT_BID.save(deps.storage, &(info.sender, total_user_bid + paid))?;
 
     // TOOK THIS FROM WASMSWAP REPO! I DON'T HAVE A CLUE HOW MATH WORKS IN RUST! SORRY!
     let fee_amount = get_owner_fee_amount(paid, config.fee)?;
@@ -286,7 +288,7 @@ fn query_bid_event_info(deps: Deps) -> StdResult<Binary> {
     let resp = BidEventInfoResponse {
         addr: Some(hi_bid_add),
         bid_amount: Some(hi_bid_amount),
-        event_closed: config.open_sale,
+        event_closed: !config.open_sale,
     };
 
     to_binary(&resp)
@@ -309,9 +311,9 @@ fn query_bidder_total_bid(deps: Deps, address: String) -> StdResult<Binary> {
 #[cfg(test)]
 mod tests {
 
-    use std::str::FromStr;
+    use std::{borrow::BorrowMut, str::FromStr};
 
-    use cosmwasm_std::{Addr, Coin, Decimal, Empty, Uint128};
+    use cosmwasm_std::{coins, Addr, Coin, Decimal, Empty, Uint128};
     use cw_multi_test::{App, Contract, ContractWrapper, Executor};
 
     use crate::msg::{BidEventInfoResponse, ExecuteMsg, InstantiateMsg};
@@ -320,27 +322,67 @@ mod tests {
 
     const OWNER: &str = "owner1";
     const BIDDER1: &str = "bidder1";
-    const _BIDDER2: &str = "bidder2";
+    const BIDDER2: &str = "bidder2";
     const USED_DENOM: &str = "Juno";
     fn bid_festival_contract() -> Box<dyn Contract<Empty>> {
         let contract = ContractWrapper::new(execute, instantiate, query);
         Box::new(contract)
     }
 
+    fn bank_balance(router: &mut App, addr: &Addr, denom: String) -> Coin {
+        router
+            .wrap()
+            .query_balance(addr.to_string(), denom)
+            .unwrap()
+    }
+
     #[test]
     fn test_instantiate() {
         let mut app = App::default();
 
-        let festival_code = app.store_code(bid_festival_contract());
+        // set initial balances for owner and check balance
+        let funds = coins(20000, USED_DENOM);
+        app.borrow_mut().init_modules(|router, _, storage| {
+            router
+                .bank
+                .init_balance(storage, &Addr::unchecked(OWNER), funds.clone())
+                .unwrap()
+        });
+        let balance: Coin = bank_balance(&mut app, &Addr::unchecked(OWNER), USED_DENOM.to_string());
+        assert_eq!(balance.amount, Uint128::new(20000));
 
+        // set initial balances for Bidder1 and check balance
+        app.borrow_mut().init_modules(|router, _, storage| {
+            router
+                .bank
+                .init_balance(storage, &Addr::unchecked(BIDDER1), funds.clone())
+                .unwrap()
+        });
+        let balance: Coin =
+            bank_balance(&mut app, &Addr::unchecked(BIDDER1), USED_DENOM.to_string());
+        assert_eq!(balance.amount, Uint128::new(20000));
+
+        // set initial balances for Bidder2 and check balance
+        app.borrow_mut().init_modules(|router, _, storage| {
+            router
+                .bank
+                .init_balance(storage, &Addr::unchecked(BIDDER2), funds)
+                .unwrap()
+        });
+        let balance: Coin =
+            bank_balance(&mut app, &Addr::unchecked(BIDDER2), USED_DENOM.to_string());
+        assert_eq!(balance.amount, Uint128::new(20000));
+
+        // store and instantiate contract
+        let festival_code = app.store_code(bid_festival_contract());
         let festival = app
             .instantiate_contract(
                 festival_code,
                 Addr::unchecked(OWNER),
                 &InstantiateMsg {
                     owner: Some(OWNER.to_string()),
-                    required_native_denom: USED_DENOM.to_string(),
-                    fee: Decimal::from_str("0.3").unwrap(),
+                    required_native_denom: USED_DENOM.into(),
+                    fee: Decimal::from_str("3").unwrap(),
                 },
                 &[],
                 "biddromedo",
@@ -348,47 +390,83 @@ mod tests {
             )
             .unwrap();
 
+        // execute and check bid BIDDER1
         app.execute_contract(
             Addr::unchecked(BIDDER1),
             festival.clone(),
             &ExecuteMsg::Bid {},
             &[Coin {
                 denom: USED_DENOM.to_string(),
-                amount: Uint128::new(100),
+                amount: Uint128::new(1000),
             }],
         )
         .unwrap();
-        /*
-        app.execute_contract(
-            Addr::unchecked(BIDDER2),
-            festival.clone(),
-            &ExecuteMsg::Bid {
-            },
-            &[Coin {
-                denom: USED_DENOM.to_string(),
-                amount: Uint128::new(15),
-            }],
-        )
-        .unwrap();
-
-        app.execute_contract(
-            Addr::unchecked(BIDDER1),
-            festival.clone(),
-            &ExecuteMsg::Bid {
-            },
-            &[Coin {
-                denom: USED_DENOM.to_string(),
-                amount: Uint128::new(20),
-            }],
-        )
-        .unwrap(); */
 
         let highest_bid: BidEventInfoResponse = app
             .wrap()
-            .query_wasm_smart(festival, &crate::msg::QueryMsg::HighestBidInfo {})
+            .query_wasm_smart(festival.clone(), &crate::msg::QueryMsg::HighestBidInfo {})
             .unwrap();
-        assert_eq!(highest_bid.bid_amount, Some(Uint128::new(100)));
+        assert_eq!(highest_bid.bid_amount, Some(Uint128::new(1000)));
         assert_eq!(highest_bid.addr, Some(Addr::unchecked(BIDDER1)));
         assert!(!highest_bid.event_closed);
+
+        // check if owner is receiving fees (1000*0.03) = 30
+        let balance: Coin = bank_balance(&mut app, &Addr::unchecked(OWNER), USED_DENOM.to_string());
+        assert_eq!(balance.amount, Uint128::new(20030));
+
+        // execute and check bid BIDDER2
+        app.execute_contract(
+            Addr::unchecked(BIDDER2),
+            festival.clone(),
+            &ExecuteMsg::Bid {},
+            &[Coin {
+                denom: USED_DENOM.to_string(),
+                amount: Uint128::new(1500),
+            }],
+        )
+        .unwrap();
+
+        let highest_bid: BidEventInfoResponse = app
+            .wrap()
+            .query_wasm_smart(festival.clone(), &crate::msg::QueryMsg::HighestBidInfo {})
+            .unwrap();
+        assert_eq!(highest_bid.bid_amount, Some(Uint128::new(1500)));
+        assert_eq!(highest_bid.addr, Some(Addr::unchecked(BIDDER2)));
+        assert!(!highest_bid.event_closed);
+
+        // check if owner is receiving fees (1500*0.03) = 45
+        let balance: Coin = bank_balance(&mut app, &Addr::unchecked(OWNER), USED_DENOM.to_string());
+        assert_eq!(balance.amount, Uint128::new(20075));
+
+        // ececute close event and check owner receive fees + winning bid (30 from 1st bid + 2nd bid)
+        app.execute_contract(
+            Addr::unchecked(OWNER),
+            festival.clone(),
+            &ExecuteMsg::Close {},
+            &[],
+        )
+        .unwrap();
+        let balance: Coin = bank_balance(&mut app, &Addr::unchecked(OWNER), USED_DENOM.to_string());
+        assert_eq!(balance.amount, Uint128::new(21530));
+
+        // check contract balance. It should be 1st bid - 1st bid fee (already sent to owner)
+        let balance: Coin = bank_balance(
+            &mut app,
+            &Addr::unchecked(festival.clone()),
+            USED_DENOM.to_string(),
+        );
+        assert_eq!(balance.amount, Uint128::new(970));
+
+        // Bidder 1 retracts amount. Expects initial balance - paid fee
+        app.execute_contract(
+            Addr::unchecked(BIDDER1),
+            festival,
+            &ExecuteMsg::Retract { friend_rec: None },
+            &[],
+        )
+        .unwrap();
+        let balance: Coin =
+            bank_balance(&mut app, &Addr::unchecked(BIDDER1), USED_DENOM.to_string());
+        assert_eq!(balance.amount, Uint128::new(19970));
     }
 }
