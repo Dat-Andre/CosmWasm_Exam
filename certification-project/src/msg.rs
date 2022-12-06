@@ -1,6 +1,5 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Uint128, Decimal, Addr};
-
+use cosmwasm_std::{Addr, Decimal, Uint128};
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -11,27 +10,25 @@ pub struct InstantiateMsg {
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    Bid { },
-    Close { },
-    Retract { friend_rec: Option<String>}
-
+    Bid {},
+    Close {},
+    Retract { friend_rec: Option<String> },
 }
 
 #[cw_serde]
 #[derive(QueryResponses)]
 pub enum QueryMsg {
     #[returns(Uint128)]
-    BidderTotalBid { address: String},
+    BidderTotalBid { address: String },
     #[returns(BidEventInfoResponse)]
-    HighestBidInfo { },
+    HighestBidInfo {},
     #[returns(Uint128)]
-    TotalNumberOfParticipants { }
+    TotalNumberOfParticipants {},
 }
-
 
 #[cw_serde]
 pub struct BidEventInfoResponse {
     pub addr: Option<Addr>,
     pub bid_amount: Option<Uint128>,
-    pub event_closed: bool
+    pub event_closed: bool,
 }

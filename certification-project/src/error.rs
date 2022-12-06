@@ -23,5 +23,4 @@ pub enum ContractError {
 
     #[error("Amount already retracted once")]
     AlreadyRetracted {},
-    
 }
