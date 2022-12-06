@@ -183,16 +183,22 @@ pub fn do_bid(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractErro
     }
 
     // save/update bid
-    ALL_BIDS_PER_BIDDER.update(deps.storage, info.sender, |bid| -> Result<_, ContractError> {
+    ALL_BIDS_PER_BIDDER.update(deps.storage, info.sender.clone(), |bid| -> Result<_, ContractError> {
         match bid {
             Some(mut amount) => {             
                 amount += paid;
+        
                 Ok(amount)
             }
             None => {
                 Ok(paid)
             }
         }
+    })?;
+
+    // set new current winning bid
+    HIGHEST_CURRENT_BID.update(deps.storage, |(_, _)| -> Result<_, ContractError>{
+        Ok((info.sender, total_user_bid + paid))
     })?;
 
     // TOOK THIS FROM WASMSWAP REPO! I DON'T HAVE A CLUE HOW MATH WORKS IN RUST! SORRY! 
@@ -301,6 +307,8 @@ fn query_bidder_total_bid(deps: Deps, address: String) -> StdResult<Binary> {
 #[cfg(test)]
 mod tests {
 
+    use std::str::FromStr;
+
     use cosmwasm_std::{Empty, Addr, Decimal, Uint128, Coin};
     use cw_multi_test::{Contract, ContractWrapper, App, Executor};
 
@@ -312,7 +320,7 @@ mod tests {
     const OWNER: &str = "owner1";
     const BIDDER1: &str = "bidder1";
     const BIDDER2: &str = "bidder2";
-    const USED_DENOM: &str = "uJuno";
+    const USED_DENOM: &str = "Juno";
     fn bid_festival_contract() -> Box<dyn Contract<Empty>> {
         let contract = ContractWrapper::new(
             execute,
@@ -336,7 +344,7 @@ mod tests {
             &InstantiateMsg {
                 owner: Some(OWNER.to_string()),
                 required_native_denom: USED_DENOM.to_string(),
-                fee: Decimal::new(Uint128::new(5)),
+                fee: Decimal::from_str("0.3").unwrap(),
             }, 
             &[], 
             "biddromedo", 
@@ -344,20 +352,17 @@ mod tests {
         ).unwrap();
         
         
-        
-        
         app.execute_contract(
             Addr::unchecked(BIDDER1),
             festival.clone(),
-            &ExecuteMsg::Bid {
-            },
+            &ExecuteMsg::Bid {},
             &[Coin {
                 denom: USED_DENOM.to_string(),
-                amount: Uint128::new(10),
+                amount: Uint128::new(100),
             }],
         )
         .unwrap();
-
+/*
         app.execute_contract(
             Addr::unchecked(BIDDER2),
             festival.clone(),
@@ -380,7 +385,7 @@ mod tests {
                 amount: Uint128::new(20),
             }],
         )
-        .unwrap();
+        .unwrap(); */
 
         let highest_bid: BidEventInfoResponse = app
         .wrap()
@@ -389,7 +394,7 @@ mod tests {
             &crate::msg::QueryMsg::HighestBidInfo {  },
         )
         .unwrap();
-    assert_eq!(highest_bid.bid_amount, Some(Uint128::new(20)));
+    assert_eq!(highest_bid.bid_amount, Some(Uint128::new(100)));
     assert_eq!(highest_bid.addr, Some(Addr::unchecked(BIDDER1)));
     assert_eq!(highest_bid.event_closed, false);
 
